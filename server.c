@@ -1,30 +1,29 @@
+/*
+Description: 
+Author: Osvaldo Hernandez-Segura
+Depedencies: 
+*/
+
+/* NOTES
+1. The nodes will print to a shared memory, which, for the chosen node, will then be sent to the server to print to the terminal.
+2. The server will manage the critical section for print.
+*/
+
+
+
 # include <stdio.h>
 # include <stdlib.h>
 # include <unistd.h>
 # include <string.h>
 # include <semaphore.h>
 
-typedef struct node {
-    int N = 0; // number of nodes
-    int request_number; // nodes sequence number
-    int highest_request_number; // highest request number seen
-    int outstanding_reply; // # of outstanding replies
-    int request_CS; // true when node requests critical section
-    int reply_deferred[N]; // reply_deferred[i] is true when node defers reply to node i
-//    semaphore mutex; // for mutual exclusion to shared variables
-//    semaphore wait_sem; // used to wait for all requests
-};
 
-typedef struct hacker {
-    int N = 0; // number of nodes
-    int request_number; // nodes sequence number
-    int highest_request_number; // highest request number seen
-    int outstanding_reply; // # of outstanding replies
-};
-
-
-
+/*
+Runs the network for the Ricart Agrawala algorithm.
+*/
 int runNetwork() {
+
+
 
     return 1;
 }
@@ -38,9 +37,9 @@ int runNetwork() {
 
 int main(int argc, char *argv[]) {
 
-    int n = runNetwork();
+    runNetwork();
 
-    exit(n);
+    exit(0);
 }
 
 // example output: ### START OUTPUT FOR NODE 4 ###
