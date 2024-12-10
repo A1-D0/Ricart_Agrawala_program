@@ -1,5 +1,5 @@
 /*
-Description: 
+Description: Runs a node that is integrated into and participates in the network for the Ricart Agrawala algorithm.
 Author: Osvaldo Hernandez-Segura
 Depedencies: 
 */
@@ -9,22 +9,26 @@ Depedencies:
 2. 
 */
 
+#include <iso646.h>
 # include <stdio.h>
 # include <stdlib.h>
-# include <unistd.h>
 # include <string.h>
-# include <semaphore.h>
+# include <unistd.h>
+# include <sys/ipc.h> // ipc key generation
+# include <sys/msg.h> // message queue functions
 
-typedef struct node {
-    int N = 0; // number of nodes
-    int request_number; // nodes sequence number
-    int highest_request_number; // highest request number seen
-    int outstanding_reply; // # of outstanding replies
-    int request_CS; // true when node requests critical section
-    int reply_deferred[N]; // reply_deferred[i] is true when node defers reply to node i
-//    semaphore mutex; // for mutual exclusion to shared variables
-//    semaphore wait_sem; // used to wait for all requests
+
+# define BUFFER_SIZE 50
+
+/*
+Message queue buffer.
+ */
+struct msgbuf {
+    long msg_type; // type of message
+    char msg_text[BUFFER_SIZE]; // message buffer for text of message
 };
+
+
 
 /*
 Prints the message to the shared memory.
@@ -38,12 +42,61 @@ int printMessage(unsigned int prints) {
     for (; idx < prints; idx++) {
         printf("This is line %d", prints); // note: change the fdes number to that corresponding to the shared memory
     }
-
+    return 0;
 }
 
 
 
+
+/*
+Send message from node to server.
+*/
+int send_message(int msg_id, struct msgbuf *msg_buf) {
+
+    msg_buf->msg_type = 1;
+    strcpy(msg_buf->msg_text, "this is line 1!");
+    printf("Message to be sent: %s\n", msg_buf->msg_text);
+
+    if (msgsnd(msg_id, msg_buf, BUFFER_SIZE + 1, IPC_NOWAIT) < 0) {
+        perror("Message could not be sent to server.\n");
+        return 1;
+    }
+    printf("Message '%s' sent successfully!\n", msg_buf->msg_text);
+    printf("String length is: %zu\n", strlen(msg_buf->msg_text));
+
+    return 0;
+}
+
+/*
+Gets an existing message queue from the kernel.
+*/
+int get_message_queue() {
+    // init message parameters
+    int msgq_id; // message queue id var
+    int msgflg = IPC_CREAT | 0666; // message flag
+    int i = 'a'; 
+    key_t key = ftok(".", i); // key for message queue
+    int msg_id;
+    
+    if ((msg_id = msgget(key, msgflg)) < 0) { // error for mssgget
+        perror("Message queue error:");
+        return 1;
+    }
+    printf("Message queue %d attained successfully!\n", msg_id);
+    return msg_id;
+}
+
 int main(int argc, char *argv[]) {
+
+    // init message queue
+    struct msgbuf msg_buf; // message queue buffer struct var
+    int msg_id;
+    if ((msg_id = get_message_queue()) == 1) {
+        exit(1);
+    }
+
+    // send message to server
+    send_message(msg_id, &msg_buf);
 
 
 
