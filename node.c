@@ -3,7 +3,7 @@ Description: Runs a node that is integrated into and participates in the network
 Author: Osvaldo Hernandez-Segura
 */
 
-# include <iso646.h>
+// # include <iso646.h> // may not need this
 # include <stdio.h>
 # include <stdlib.h>
 # include <string.h>
@@ -18,33 +18,18 @@ Author: Osvaldo Hernandez-Segura
 # define MAX_NODES 10
 # define REPLY 0
 
-int ME; // this node's number
-int outstanding_reply; // number of outstanding replies 
-int request_number; // nodes sequence number 
 
 enum{FALSE, TRUE};
 
-// /*
-// Semaphore buffer.
-// */
-// struct sembuf {
-//     unsigned short sem_num; // semaphore number (index)
-//     short int sem_op; // semaphore operation (i.e., increment or decrement)
-//     short int sem_flag; // operations flag
-// };
-
-/*
-Shared memory for shared variables among all existing nodes in the network.
-*/
-struct shared_variables {
-    int N; // number of nodes
-    int highest_request_number; // highest request number seen 
-    int request_CS; // true (1) when node requests critical section; otherwise, false (0)
-    int reply_deferred[MAX_NODES]; // reply_deferred[i] is true (1) when node defers reply to node i; otherwise, false (0)
-    int mutex; // binary semaphore for mutual exclusion to shared variables 
-    int wait_sem; // binary semaphore used to wait for all requests 
-};
-
+int ME; // this node's number
+int outstanding_reply; // number of outstanding replies 
+int request_number; // nodes sequence number 
+int N; // number of nodes
+int highest_request_number; // highest request number seen 
+int request_CS; // true (1) when node requests critical section; otherwise, false (0)
+int reply_deferred[MAX_NODES]; // reply_deferred[i] is true (1) when node defers reply to node i; otherwise, false (0)
+int mutex; // binary semaphore for mutual exclusion to shared variables 
+int wait_sem; // binary semaphore used to wait for all requests 
 
 /*
 Message queue buffer.
@@ -102,24 +87,6 @@ int V(int sem_id) {
 
 
 
-
-
-
-
-// /*
-// Prints the message to the shared memory.
-
-// Arguments: 
-//     prints (int): number of prints.
-// */
-// int print_message(unsigned int prints) {
-//     int idx = 0;
-//     for (; idx < prints; idx++) {
-//         printf("This is line %d", prints); // note: change the fdes number to that corresponding to the shared memory
-//     }
-//     return 0;
-// }
-
 /*
 Send message from node to server.
 */
@@ -135,6 +102,83 @@ int send_message_to_server(int msg_id, struct msgbuf *msg_buf) {
     printf("Message '%s' sent successfully!\n", msg_buf->msg_text);
     // printf("String length is: %zu\n", strlen(msg_buf->msg_text));
     return 0;
+}
+
+
+
+/*
+Send reply to node i via message queue.
+*/
+void send_rep(int reply, int i, int msg_id) {
+    struct msgbuf msg_buf; // message queue buffer struct var
+    sprintf(msg_buf.msg_text, "REPLY %d", i); // write to msg_text
+    if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("send_rep failed!\n");
+    printf("Message from node %d sent!\n", ME);
+}
+
+/*
+Send REQUEST to node i.
+*/
+void send_req(int request, int me, int request_number, int i, int msg_id) {
+    struct msgbuf msg_buf; // message queue buffer struct var
+    sprintf(msg_buf.msg_text, "REQUEST %d %d %d", i, ME, request_number); // write to msg_text
+    if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("send_req failed!\n");
+    printf("Message from node %d sent!\n", ME);
+}
+
+/*
+Receive REPLY messages.
+*/
+void receive_reply() {
+    outstanding_reply--;
+    V(wait_sem);
+}
+
+
+/* THREE PROCESSES--MAKE SURE TO FORK THEM */
+
+void receive_request(int k, int i, int msg_id) {
+    int defer_it;
+
+    if (k > highest_request_number) highest_request_number = k;
+
+    P(mutex);
+
+    defer_it = (request_CS) && ((k > request_number) || (k == request_number && i > ME));
+
+    V(mutex);
+
+    if (defer_it) reply_deferred[i] = TRUE;
+    else send_rep(REPLY, i, msg_id); // send REPLY to node i via message queue
+}
+
+void send_request(int msg_id) {
+
+    P(mutex);
+    request_CS = TRUE;
+    request_number = highest_request_number++;
+    V(mutex);
+
+    outstanding_reply = N - 1;
+
+    int REQUEST = 0; // may need to change to string
+
+    for (int i = 0; i <= N; i++) if (i != N) send_req(REQUEST, ME, request_number, i, msg_id); // send REQUEST to node i
+
+    while(outstanding_reply != 0); // busy wait
+
+    P(wait_sem);
+
+    // CRITICAL SECTION
+
+    request_CS = FALSE;
+
+    for (int i = 1; i <= N; i++) {
+        if (reply_deferred[i]) {
+            reply_deferred[i] = FALSE;
+            send_rep(REPLY, i, msg_id); // send REPLY to node i via message queue
+        }
+    }
 }
 
 
@@ -157,8 +201,8 @@ int send_message_to_server(int msg_id, struct msgbuf *msg_buf) {
 /*
 Removes shared memory for last node.
 */
-int remove_shared_memory(int shm_id, struct shared_variables *shm_vars) {
-    if (shm_vars->N == 1) { // last node condition
+int remove_shared_memory(int shm_id) {
+    if (N == 1) { // last node condition
         if ((shmctl(shm_id, IPC_RMID, NULL)) < 0) {
             return 1;
         }
@@ -169,8 +213,8 @@ int remove_shared_memory(int shm_id, struct shared_variables *shm_vars) {
 /*
 Detach this node from shared memory.
 */
-int detach_shared_memory(struct shared_variables *shm_vars) {
-    if (shmdt(shm_vars) < 0) {
+int detach_shared_memory(int *shm_id) {
+    if (shmdt(shm_id) < 0) {
         perror("Failed to detach from shared memory!\n");
         return 1;
     }
@@ -180,9 +224,8 @@ int detach_shared_memory(struct shared_variables *shm_vars) {
 /*
 Attach to shared memory.
 */
-int attach_shared_memory(int shm_id, struct shared_variables **shm_vars) {
-    *shm_vars = (struct shared_variables *)shmat(shm_id, NULL, 0);
-    if (*shm_vars == (void *)-1) {
+int attach_shared_memory(int shm_id) {
+    if (shmat(shm_id, NULL, 0) < 0) {
         perror("Failed to attach to shared memory!\n");
         return 1;
     }
@@ -212,6 +255,7 @@ void set_semaphore_value(int sem_id, int value) {
     if (semctl(sem_id, 0, SETVAL, value)) {
         perror("Failed to set value to semaphore!\n");
     }
+    printf("Initial mutex value: %d\n", semctl(sem_id, 0, GETVAL));
 }
 
 /*
@@ -265,13 +309,11 @@ N, request number, highest_request_number,
 outstanding_reply, request_CS, reply_deferred[N], 
 mutex, and wait_sem.
 */
-int access_shared_variables(int shm_id, struct shared_variables *shm_vars) {
-    if (attach_shared_memory(shm_id, &shm_vars)) return 1;
-    (shm_vars->N)++;
-    (shm_vars->highest_request_number)++;
-    shm_vars->request_CS = 0;
-    // shm_vars->mutex = 0;
-    // shm_vars->wait_sem = 0;
+int access_shared_variables(int shm_id) {
+    if (attach_shared_memory(shm_id)) return 1;
+    N++;
+    highest_request_number++;
+    request_CS = 0;
     printf("Node %d accessed shared variables successfully!\n", ME);
     return 0;
 }
@@ -279,34 +321,36 @@ int access_shared_variables(int shm_id, struct shared_variables *shm_vars) {
 /*
 Runs the error-free network for node ipc.
 */
-void run_node_network(struct shared_variables *shm_vars) {
-    shm_vars->mutex = create_semaphore(); // get semaphore for this node
+void run_node_network() {
+    mutex = create_semaphore(); // get semaphore for this node
+    
+    int msg_id;
+    if ((msg_id = get_message_queue())  == 1) exit(1); // get message queue (to share among all nodes)
+    
     if (ME == 1) { // conditional check: ensure only first node initialize the shared (memory) variables
-        set_semaphore_value(shm_vars->mutex, 1); // set binary semaphore mutex value to 1 (unlocked)
-        // if ((shm_vars->reply_deferred = malloc(MAX_NODES * sizeof(int))) < 0) { // allocate memory for reply_deferred pointer to int array
-        //     perror("Failed to allocate memory for reply_deferred pointer!\n");
-        //     exit(10);
-        // }
-        for (int idx = 0; idx < MAX_NODES; idx++) shm_vars->reply_deferred[idx] = FALSE;
-        shm_vars->N = 1;
-        shm_vars->highest_request_number = 1;
+        set_semaphore_value(mutex, 1); // set binary semaphore mutex value to 1 (unlocked)
+        for (int idx = 0; idx < MAX_NODES; idx++) reply_deferred[idx] = FALSE;
+        N = 1;
+        highest_request_number = 1;
         printf("Shared variables initialized by node 1.\n");
     } else {
         printf("Node %d attached to existing shared memory.\n", ME);
     }
-    printf("Semaphore %d for mutex attained successfully!\n", shm_vars->mutex);
+    printf("Semaphore %d for mutex attained successfully!\n", mutex);
 
     // get shared (memory) variables
     int shm_id = get_shared_memory();
 
     // access shared (memory) variables via CS
-    P(shm_vars->mutex);
+    P(mutex);
 
     // CS
     printf("Node %d in CS, yay!!!\n", ME);
-    access_shared_variables(shm_id, shm_vars);
+    access_shared_variables(shm_id);
+    printf("Node %d doing work...\n", ME);
+    sleep(3); // doing work...
 
-    V(shm_vars->mutex);
+    V(mutex);
 
     // while (1) { // communicate among other nodes
     //     break;
@@ -320,19 +364,12 @@ int main(int argc, char *argv[]) {
     }
 
     // init shared varibles struct
-    struct shared_variables shm_vars; 
-    set_my_node_number(atoi(argv[1]));
-    // int shm_id = get_shared_memory();
+    ME = atoi(argv[1]);
 
-
-    // init message queue
-    struct msgbuf msg_buf; // message queue buffer struct var
-    int msg_id;
-    if ((msg_id = get_message_queue())  == 1) exit(1);
-
+    // fork three processes--one for each process (Cf. research paper)
 
     // run error-free node network
-    run_node_network(&shm_vars);
+    run_node_network();
 
 
     // send message to server iff this node receives all node REPLYs
@@ -347,9 +384,3 @@ int main(int argc, char *argv[]) {
 
     exit(0);
 }
-
-
-/*
-TO DO NEXT: 
-Implement Ricart-A algorithm for nodes.
-*/
