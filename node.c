@@ -111,6 +111,7 @@ Send reply to node i via message queue.
 */
 void send_rep(int reply, int i, int msg_id) {
     struct msgbuf msg_buf; // message queue buffer struct var
+    msg_buf.msg_type = 2; // type 2 for REPLY
     sprintf(msg_buf.msg_text, "REPLY %d", i); // write to msg_text
     if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("send_rep failed!\n");
     printf("Message from node %d sent!\n", ME);
@@ -119,24 +120,27 @@ void send_rep(int reply, int i, int msg_id) {
 /*
 Send REQUEST to node i.
 */
-void send_req(int request, int me, int request_number, int i, int msg_id) {
+void send_req(int request, int me, int i, int request_number, int msg_id) {
     struct msgbuf msg_buf; // message queue buffer struct var
-    sprintf(msg_buf.msg_text, "REQUEST %d %d %d", i, ME, request_number); // write to msg_text
+    msg_buf.msg_type = 1; // type 1 for REQUEST
+    sprintf(msg_buf.msg_text, "REQUEST %d %d %d", ME, i, request_number); // write to msg_text
+
+    // printf("msg_text is: %s\n", msg_buf.msg_text);
+
     if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("send_req failed!\n");
-    printf("Message from node %d sent!\n", ME);
+    printf("Message %s from node %d sent!\n", msg_buf.msg_text, ME);
 }
 
-/*
-Receive REPLY messages.
-*/
-void receive_reply() {
-    outstanding_reply--;
-    V(wait_sem);
-}
 
 
 /* THREE PROCESSES--MAKE SURE TO FORK THEM */
 
+
+/*
+Process which receives request (k,j) messages.
+k is the sequence number being requested; 
+i is the node making the request.
+*/
 void receive_request(int k, int i, int msg_id) {
     int defer_it;
 
@@ -152,6 +156,9 @@ void receive_request(int k, int i, int msg_id) {
     else send_rep(REPLY, i, msg_id); // send REPLY to node i via message queue
 }
 
+/*
+Process which invokes mutual exclusion for this node.
+*/
 void send_request(int msg_id) {
 
     P(mutex);
@@ -163,9 +170,11 @@ void send_request(int msg_id) {
 
     int REQUEST = 0; // may need to change to string
 
-    for (int i = 0; i <= N; i++) if (i != N) send_req(REQUEST, ME, request_number, i, msg_id); // send REQUEST to node i
+    for (int i = 0; i <= N; i++) if (i != ME) send_req(REQUEST, ME, i, request_number, msg_id); // send REQUEST to node i
 
     while(outstanding_reply != 0); // busy wait
+
+    // printf("\nwait_sem value: %d\n\n", semctl(wait_sem, 0, GETVAL));
 
     P(wait_sem);
 
@@ -181,13 +190,80 @@ void send_request(int msg_id) {
     }
 }
 
+/*
+Receive REPLY messages;
+prcess which receives reply messages.
+*/
+void receive_reply() {
+    outstanding_reply--;
+    V(wait_sem);
+}
+
+
+/* THREE PROCESSES--MAKE SURE TO FORK THEM */
 
 
 
+/*
+Enhanced message parsing for REQUEST messages
+*/
+void receive_request_message(int msg_id) {
+    struct msgbuf msg;
+    char msg_type[BUFFER_SIZE];
+    int k, i;
 
+    // Continuously listen for messages
+    while (TRUE) {
+        // Receive messages of type 1 (REQUEST messages)
+        if (msgrcv(msg_id, &msg, BUFFER_SIZE, 1, 0) > 0) {
+            // Parse the message to extract message type and parameters
+            if (sscanf(msg.msg_text, "%s %d %d", msg_type, &i, &k) == 3) {
+                // Verify it's a REQUEST message
+                if (strcmp(msg_type, "REQUEST") == 0) {
+                    // Call existing receive_request logic with parsed parameters
+                    printf("%s received!\n", msg.msg_text);
+                    receive_request(k, i, msg_id);
+                } else {
+                    fprintf(stderr, "Unexpected message type in request process: %s\n", msg_type);
+                }
+            } else {
+                fprintf(stderr, "Malformed REQUEST message: %s\n", msg.msg_text);
+            }
+        } else {
+            perror("Error receiving REQUEST message");
+        }
+    }
+}
 
+/*
+Enhanced message parsing for REPLY messages
+*/
+void receive_reply_message(int msg_id) {
+    struct msgbuf msg;
+    char msg_type[BUFFER_SIZE];
+    int sender;
 
-
+    // Continuously listen for messages
+    while (TRUE) {
+        // Receive messages of type 2 (REPLY messages)
+        if (msgrcv(msg_id, &msg, BUFFER_SIZE, 2, 0) > 0) {
+            // Parse the message to extract message type and sender
+            if (sscanf(msg.msg_text, "%s %d", msg_type, &sender) == 2) {
+                // Verify it's a REPLY message
+                if (strcmp(msg_type, "REPLY") == 0) {
+                    // Call existing receive_reply logic
+                    receive_reply();
+                } else {
+                    fprintf(stderr, "Unexpected message type in reply process: %s\n", msg_type);
+                }
+            } else {
+                fprintf(stderr, "Malformed REPLY message: %s\n", msg.msg_text);
+            }
+        } else {
+            perror("Error receiving REPLY message");
+        }
+    }
+}
 
 
 
@@ -237,7 +313,7 @@ Creates shared memory for first node; for all other nodes, gets an existing shar
 */
 int get_shared_memory() {
     int shm_id; 
-    int i = 'm';
+    int i = ME; // create an independent shared memory for each node i
     key_t key = ftok(".", i);
     int msgflg = IPC_CREAT | 0666;
     if ((shm_id = shmget(key, 1000, msgflg)) < 0) {
@@ -274,14 +350,14 @@ Creates a semaphore.
 */
 int create_semaphore() {
     int sem_id; 
-    int i = 's';
+    int i = 's' + rand();
     key_t key = ftok(".", i);
     int msgflg = IPC_CREAT | 0666;
     if ((sem_id = semget(key, 1, msgflg)) < 0) { // error
         perror("Failed to create semaphore for node!\n");
         return 1;
     }
-    printf("Sempaphore %d created successfully!\n", sem_id);
+    // printf("Sempaphore %d created successfully!\n", sem_id);
     return sem_id;
 }
 
@@ -311,10 +387,10 @@ mutex, and wait_sem.
 */
 int access_shared_variables(int shm_id) {
     if (attach_shared_memory(shm_id)) return 1;
-    N++;
-    highest_request_number++;
-    request_CS = 0;
-    printf("Node %d accessed shared variables successfully!\n", ME);
+    // N++;
+    // highest_request_number++;
+    // request_CS = 0;
+    printf("Node %d child %d accessed shared variables successfully!\n", ME, getpid());
     return 0;
 }
 
@@ -322,39 +398,104 @@ int access_shared_variables(int shm_id) {
 Runs the error-free network for node ipc.
 */
 void run_node_network() {
-    mutex = create_semaphore(); // get semaphore for this node
-    
+    mutex = create_semaphore(); // get mutex semaphore for this node
+    wait_sem = create_semaphore(); // get wait_sem semaphore for this node
+
     int msg_id;
     if ((msg_id = get_message_queue())  == 1) exit(1); // get message queue (to share among all nodes)
     
-    if (ME == 1) { // conditional check: ensure only first node initialize the shared (memory) variables
-        set_semaphore_value(mutex, 1); // set binary semaphore mutex value to 1 (unlocked)
+    // if (ME == 1) { // conditional check: ensure only first node initialize the shared (memory) variables
+
+        if (semctl(mutex, 0, SETVAL, 1)) { // set mutex to initial value of 1
+            perror("Failed to set value to mutex semaphore!\n");
+        }
+
+        if (semctl(wait_sem, 0, SETVAL, 1)) { // set wait_sem to initial value of 1
+            perror("Failed to set value to wait_sem semaphore!\n");
+        }
+
+        // printf("Initial mutex value: %d\n", semctl(mutex, 0, GETVAL));
+
+
         for (int idx = 0; idx < MAX_NODES; idx++) reply_deferred[idx] = FALSE;
         N = 1;
         highest_request_number = 1;
-        printf("Shared variables initialized by node 1.\n");
-    } else {
-        printf("Node %d attached to existing shared memory.\n", ME);
-    }
+    //     printf("Shared variables initialized by node 1.\n");
+    // } else {
+    //     printf("Node %d attached to existing shared memory.\n", ME);
+    // }
     printf("Semaphore %d for mutex attained successfully!\n", mutex);
+    printf("Semaphore %d for wait_sem attained successfully!\n", wait_sem);
 
     // get shared (memory) variables
     int shm_id = get_shared_memory();
 
-    // access shared (memory) variables via CS
-    P(mutex);
 
-    // CS
-    printf("Node %d in CS, yay!!!\n", ME);
-    access_shared_variables(shm_id);
-    printf("Node %d doing work...\n", ME);
-    sleep(3); // doing work...
+    // fork three child processes
+    int pid_receive_request;
+    int pid_send_request;
+    int pid_receive_reply;
 
-    V(mutex);
+    if ((pid_receive_request = fork()) == 0) { // in child process
+        printf("Forking first child...\n");
 
-    // while (1) { // communicate among other nodes
-    //     break;
-    // }
+        receive_request_message(msg_id);
+
+
+
+
+
+
+
+        // struct msgbuf msg;
+        // while (TRUE) {
+        //     if (msgrcv(msg_id, &msg, BUFFER_SIZE, 1, 0) > 0) {
+        //         int k, i;
+        //         sscanf(msg.msg_text, "REQUEST %d %d", &k, &i);
+        //         receive_request(k, i, msg_id);
+        //     }
+        // }
+        exit(0); // exit child process
+    }
+
+    if ((pid_send_request = fork()) == 0) { // in child process
+        printf("Forking second child...\n");
+
+        while (TRUE) {
+            send_request(msg_id);
+            sleep(1);
+        }
+        
+
+        // while (TRUE) {
+        //     send_request(msg_id);
+        //     sleep(1); // Adjust sleep time as needed to simulate periodic critical section requests
+        // }
+        exit(0); // exit child process
+    }
+
+    if ((pid_receive_reply = fork()) == 0) { // in child process
+        printf("Forking third child...\n");
+
+
+
+        receive_reply_message(msg_id);
+
+
+
+        // struct msgbuf msg;
+        // while (TRUE) {
+        //     if (msgrcv(msg_id, &msg, BUFFER_SIZE, 2, 0) > 0) {
+        //         receive_reply();
+        //     }
+        // }
+        exit(0); // exit child process
+    }
+
+    // in parent process; wait for child processes to terminate
+    wait(NULL);
+    wait(NULL);
+    wait(NULL);
 }
 
 int main(int argc, char *argv[]) {
@@ -366,21 +507,13 @@ int main(int argc, char *argv[]) {
     // init shared varibles struct
     ME = atoi(argv[1]);
 
-    // fork three processes--one for each process (Cf. research paper)
-
-    // run error-free node network
+    // run node network
     run_node_network();
-
-
-    // send message to server iff this node receives all node REPLYs
-    // if (send_message_to_server(msg_id, &msg_buf)  == 1) exit(4);
-
-
-    // remove ipcs
-    // remove shared memory
-    // if (remove_shared_memory(shm_id, &shm_vars) == 1) exit(5);
-
-    // remove allocate memory for reply_deferred pointer; ensure last exsting node does this
 
     exit(0);
 }
+
+/*
+TO DO NEXT:
+Fork three child processes correctly.
+*/
