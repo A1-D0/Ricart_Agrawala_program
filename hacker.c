@@ -1,5 +1,5 @@
 /*
-Description: Hacker node which sends a message to server when summoned and is not part of the Ricart-Agrawala algorithm.
+Description: Runs a "hacker" node which sends a message to server when summoned and is not part of the Ricart-Agrawala algorithm.
 Author: Osvaldo Hernandez-Segura
 */
 
@@ -34,7 +34,6 @@ int get_message_queue() {
         perror("Message queue error:");
         return 1;
     }
-    printf("Message queue %d attained successfully!\n", msg_id);
     return msg_id;
 }
 
@@ -44,6 +43,5 @@ int main(int argc, char *argv[]) {
     msg_buf.msg_type = 3; // type 3 is for node to server message
     sprintf(msg_buf.msg_text, "HACKER Ja ja ja...");
     if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("Message could not be sent to server.\n");
-    printf("Message %s sent to server!\n", msg_buf.msg_text);
     exit(0);
 }

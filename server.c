@@ -1,15 +1,6 @@
 /*
-Description: Runs the network and critical section for the Ricart-Agrawala algorithm.
+Description: Runs the server for the Ricart-Agrawala algorithm.
 Author: Osvaldo Hernandez-Segura
-*/
-
-/* NOTES
-1. The chosen node will print one line at a time to a shared memory, which will then be sent to the server to print, within the CS, to the terminal.
-2. The server will manage the critical section for print.
-3. To remove all semaphores, use ipcrm -a
-4. To view all semaphores: ipcs -s
-5. To view all shared memory: ipcs -m
-6. 
 */
 
 # include <stdio.h>
@@ -30,7 +21,6 @@ struct msgbuf {
     long msg_type; // type of message
     char msg_text[BUFFER_SIZE]; // message buffer for text of message
 };
-
 
 /*
 Removes an existing message queue.
@@ -58,7 +48,6 @@ int create_message_queue() {
         perror("Message queue creation error!\n");
         return 1;
     }
-    printf("Message queue %d created successfully!\n", msg_id);
     return msg_id;
 }
 
@@ -66,25 +55,14 @@ int create_message_queue() {
 Runs the server to print node messages.
 */
 int run_server(int msg_id, struct msgbuf *msg_buf) {
-    printf("Running server...\n");
     while (TRUE) {
-        // printf("In loop...\n"); 
-        int validation;
-        validation = msgrcv(msg_id, msg_buf, sizeof(msg_buf->msg_text), 3, 0); // accept type 3 (note 4th parameter)
-        // printf("Validation is: %d\n", validation);
-        if (validation > -1) { 
-            // printf("Message receive by node or hacker is not empty.\n");
+        if (msgrcv(msg_id, msg_buf, sizeof(msg_buf->msg_text), 3, 0) > -1) { 
             if (msg_buf->msg_type == 3) { // verify it's a node message
                 printf("%s \n", msg_buf->msg_text); // print message sent from node
                 memset(msg_buf->msg_text, 0, BUFFER_SIZE); // clear buffer
-            } else {
-                fprintf(stderr, "Unexpected message type in server process: %zu\n", msg_buf->msg_type);
-            }
-        } else {
-            // fprintf(stderr, "Error receiving message in server process: %zu\n", msg_buf->msg_type);
+            } else fprintf(stderr, "Unexpected message type in server process: %zu\n", msg_buf->msg_type);
         }
     }
-    // printf("Message '%s' recieved successfully!\n", msg_buf->msg_text);
     return 0;
 }
 
@@ -93,18 +71,14 @@ int main(int argc, char *argv[]) {
     
     // init message queue
     int msg_id; // message queue id
-    if ((msg_id = create_message_queue()) < 0) { // error
-        exit(1);
-    }
+    if ((msg_id = create_message_queue()) < 0) exit(1);
     struct msgbuf msg_buf; // message queue buffer struct var
 
     // run program's main functions
     run_server(msg_id, &msg_buf);
 
     // remove message queue
-    if (remove_message_queue(msg_id) < 0) { // error
-        exit(2);
-    }
+    if (remove_message_queue(msg_id) < 0) exit(2);
 
     exit(0);
 }
