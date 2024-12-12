@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     int msg_id = get_message_queue();
     struct msgbuf msg_buf;
     msg_buf.msg_type = 3; // type 3 is for node to server message
-    sprintf(msg_buf.msg_text, "HACKER Ja ja ja...\n");
+    sprintf(msg_buf.msg_text, "HACKER Ja ja ja...");
     if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("Message could not be sent to server.\n");
     printf("Message %s sent to server!\n", msg_buf.msg_text);
     exit(0);

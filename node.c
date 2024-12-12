@@ -1,5 +1,5 @@
 /*
-Description: Runs a node that is integrated into and participates in the network for the Ricart Agrawala algorithm.
+Description: Runs a node that is integrated into and participates in the network for the Ricart-Agrawala algorithm.
 Author: Osvaldo Hernandez-Segura
 */
 
@@ -17,7 +17,6 @@ Author: Osvaldo Hernandez-Segura
 # define BUFFER_SIZE 50
 # define MAX_NODES 10
 # define REPLY 0
-
 
 enum{FALSE, TRUE};
 
@@ -45,13 +44,6 @@ Set node number, ME, given in CLI to this node.
 void set_my_node_number(int node_number) {
     ME = node_number;
 }
-
-
-
-
-
-
-
 
 /*
 Get semaphore resource (P operation).
@@ -91,16 +83,28 @@ int V(int sem_id) {
 Send message from node to server.
 */
 int send_message_to_server(int msg_id, struct msgbuf *msg_buf) {
-    msg_buf->msg_type = 1;
-    strcpy(msg_buf->msg_text, "this is line 1!");
-    printf("Message to be sent: %s\n", msg_buf->msg_text);
+    msg_buf->msg_type = 3; // type 3 is for node to server message
+    memset(msg_buf->msg_text, 0, BUFFER_SIZE); // clear buffer
+    sprintf(msg_buf->msg_text, "########## START OUTPUT FOR NODE %d ##########", ME);
+    
+    printf("Sending message to server...\n");
 
-    if (msgsnd(msg_id, msg_buf, BUFFER_SIZE + 1, IPC_NOWAIT) < 0) {
+    for (int n = 0; n < 6; n++) { // send body lines to server 5 times
+        if (msgsnd(msg_id, msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) { // first iter, send header
+            perror("Message could not be sent to server.\n");
+            return 1;
+        }
+        memset(msg_buf->msg_text, 0, BUFFER_SIZE); // clear buffer
+        sprintf(msg_buf->msg_text, "%d this is line %d", ME, (n + 1));
+    }
+    memset(msg_buf->msg_text, 0, BUFFER_SIZE); // clear buffer
+    sprintf(msg_buf->msg_text, "---------- END OUTPUT FOR NODE %d ----------", ME);
+    // printf("msg_text is: %s\n", msg_buf->msg_text);
+    if (msgsnd(msg_id, msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) { // send footer
         perror("Message could not be sent to server.\n");
         return 1;
     }
-    printf("Message '%s' sent successfully!\n", msg_buf->msg_text);
-    // printf("String length is: %zu\n", strlen(msg_buf->msg_text));
+    memset(msg_buf->msg_text, 0, BUFFER_SIZE); // clear buffer
     return 0;
 }
 
@@ -114,7 +118,7 @@ void send_rep(int reply, int i, int msg_id) {
     msg_buf.msg_type = 2; // type 2 for REPLY
     sprintf(msg_buf.msg_text, "REPLY %d", i); // write to msg_text
     if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("send_rep failed!\n");
-    printf("Message from node %d sent!\n", ME);
+    // printf("Message from node %d sent!\n", ME);
 }
 
 /*
@@ -124,17 +128,9 @@ void send_req(int request, int me, int i, int request_number, int msg_id) {
     struct msgbuf msg_buf; // message queue buffer struct var
     msg_buf.msg_type = 1; // type 1 for REQUEST
     sprintf(msg_buf.msg_text, "REQUEST %d %d %d", ME, i, request_number); // write to msg_text
-
-    // printf("msg_text is: %s\n", msg_buf.msg_text);
-
     if (msgsnd(msg_id, &msg_buf, BUFFER_SIZE, IPC_NOWAIT) < 0) perror("send_req failed!\n");
     printf("Message %s from node %d sent!\n", msg_buf.msg_text, ME);
 }
-
-
-
-/* THREE PROCESSES--MAKE SURE TO FORK THEM */
-
 
 /*
 Process which receives request (k,j) messages.
@@ -174,11 +170,12 @@ void send_request(int msg_id) {
 
     while(outstanding_reply != 0); // busy wait
 
-    // printf("\nwait_sem value: %d\n\n", semctl(wait_sem, 0, GETVAL));
-
     P(wait_sem);
 
-    // CRITICAL SECTION
+    // CRITICAL SECTION; send message to server
+    printf("In CS...\n");
+    struct msgbuf msg_buf;
+    send_message_to_server(msg_id, &msg_buf);
 
     request_CS = FALSE;
 
@@ -199,29 +196,24 @@ void receive_reply() {
     V(wait_sem);
 }
 
-
-/* THREE PROCESSES--MAKE SURE TO FORK THEM */
-
-
-
 /*
-Enhanced message parsing for REQUEST messages
+Enhanced message parsing for REQUEST messages.
 */
 void receive_request_message(int msg_id) {
     struct msgbuf msg;
     char msg_type[BUFFER_SIZE];
     int k, i;
 
-    // Continuously listen for messages
+    // continuously listen for messages
     while (TRUE) {
-        // Receive messages of type 1 (REQUEST messages)
+        // receive messages of type 1 (REQUEST messages)
         if (msgrcv(msg_id, &msg, BUFFER_SIZE, 1, 0) > 0) {
-            // Parse the message to extract message type and parameters
+            // parse the message to extract message type and parameters
             if (sscanf(msg.msg_text, "%s %d %d", msg_type, &i, &k) == 3) {
-                // Verify it's a REQUEST message
+                // verify it's a REQUEST message
                 if (strcmp(msg_type, "REQUEST") == 0) {
-                    // Call existing receive_request logic with parsed parameters
-                    printf("%s received!\n", msg.msg_text);
+                    // call existing receive_request logic with parsed parameters
+                    // printf("%s received!\n", msg.msg_text);
                     receive_request(k, i, msg_id);
                 } else {
                     fprintf(stderr, "Unexpected message type in request process: %s\n", msg_type);
@@ -230,28 +222,28 @@ void receive_request_message(int msg_id) {
                 fprintf(stderr, "Malformed REQUEST message: %s\n", msg.msg_text);
             }
         } else {
-            perror("Error receiving REQUEST message");
+            perror("Error receiving REQUEST message\n");
         }
     }
 }
 
 /*
-Enhanced message parsing for REPLY messages
+Enhanced message parsing for REPLY messages.
 */
 void receive_reply_message(int msg_id) {
     struct msgbuf msg;
     char msg_type[BUFFER_SIZE];
     int sender;
 
-    // Continuously listen for messages
+    // continuously listen for messages
     while (TRUE) {
-        // Receive messages of type 2 (REPLY messages)
+        // receive messages of type 2 (REPLY messages)
         if (msgrcv(msg_id, &msg, BUFFER_SIZE, 2, 0) > 0) {
-            // Parse the message to extract message type and sender
+            // parse the message to extract message type and sender
             if (sscanf(msg.msg_text, "%s %d", msg_type, &sender) == 2) {
-                // Verify it's a REPLY message
+                // verify it's a REPLY message
                 if (strcmp(msg_type, "REPLY") == 0) {
-                    // Call existing receive_reply logic
+                    // call existing receive_reply logic
                     receive_reply();
                 } else {
                     fprintf(stderr, "Unexpected message type in reply process: %s\n", msg_type);
@@ -264,15 +256,6 @@ void receive_reply_message(int msg_id) {
         }
     }
 }
-
-
-
-
-
-
-
-
-
 
 /*
 Removes shared memory for last node.
@@ -387,9 +370,6 @@ mutex, and wait_sem.
 */
 int access_shared_variables(int shm_id) {
     if (attach_shared_memory(shm_id)) return 1;
-    // N++;
-    // highest_request_number++;
-    // request_CS = 0;
     printf("Node %d child %d accessed shared variables successfully!\n", ME, getpid());
     return 0;
 }
@@ -438,57 +418,22 @@ void run_node_network() {
 
     if ((pid_receive_request = fork()) == 0) { // in child process
         printf("Forking first child...\n");
-
         receive_request_message(msg_id);
-
-
-
-
-
-
-
-        // struct msgbuf msg;
-        // while (TRUE) {
-        //     if (msgrcv(msg_id, &msg, BUFFER_SIZE, 1, 0) > 0) {
-        //         int k, i;
-        //         sscanf(msg.msg_text, "REQUEST %d %d", &k, &i);
-        //         receive_request(k, i, msg_id);
-        //     }
-        // }
         exit(0); // exit child process
     }
 
     if ((pid_send_request = fork()) == 0) { // in child process
         printf("Forking second child...\n");
-
         while (TRUE) {
             send_request(msg_id);
             sleep(1);
         }
-        
-
-        // while (TRUE) {
-        //     send_request(msg_id);
-        //     sleep(1); // Adjust sleep time as needed to simulate periodic critical section requests
-        // }
         exit(0); // exit child process
     }
 
     if ((pid_receive_reply = fork()) == 0) { // in child process
         printf("Forking third child...\n");
-
-
-
         receive_reply_message(msg_id);
-
-
-
-        // struct msgbuf msg;
-        // while (TRUE) {
-        //     if (msgrcv(msg_id, &msg, BUFFER_SIZE, 2, 0) > 0) {
-        //         receive_reply();
-        //     }
-        // }
         exit(0); // exit child process
     }
 
@@ -504,7 +449,7 @@ int main(int argc, char *argv[]) {
         exit(-1);
     }
 
-    // init shared varibles struct
+    // set node number to ME
     ME = atoi(argv[1]);
 
     // run node network
@@ -515,5 +460,5 @@ int main(int argc, char *argv[]) {
 
 /*
 TO DO NEXT:
-Fork three child processes correctly.
+Send messages to server from node in CS.
 */
